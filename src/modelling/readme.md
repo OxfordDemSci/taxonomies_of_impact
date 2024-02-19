@@ -1,6 +1,6 @@
 Example for the sys.argvs -- To run the topic model, use something like: 
 
-> python .\src\topic_modelling.py ".\data\raw\raw_ref_ics_data.xlsx" ".\data\topic_modelled\"
+> python .\src\topic_modelling.py ".\data\raw\raw_ref_ics_data.xlsx" ".\data\topic_modelled\" "Clean_Run"
 
 To run to reducer code:
 

@@ -1,30 +1,31 @@
-import re
+import os
 import sys
+import re
+import shutil
 from collections import Counter
 from pathlib import Path
 from typing import List, Union
 
-import markdown
 import numpy
 import pandas
-from bertopic import BERTopic
-from bertopic.representation import KeyBERTInspired
-from bertopic.vectorizers import ClassTfidfTransformer
+import warnings
+
 from bs4 import BeautifulSoup
 from loguru import logger
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics import silhouette_score
 
-try:
-    from cuml.cluster import HDBSCAN
-except ImportError:
-    from hdbscan import HDBSCAN
-try:
-    from cuml.manifold import UMAP
-except ImportError:
-    from umap import UMAP
+from bertopic import BERTopic
+from bertopic.representation import KeyBERTInspired
+from bertopic.vectorizers import ClassTfidfTransformer
 
-columns_for_analysis = [
+from cuml.cluster import HDBSCAN
+from cuml.manifold import UMAP
+
+import markdown
+
+
+cols = [
     "1. Summary of the impact",
     "2. Underpinning research",
     "3. References to the research",
@@ -56,10 +57,12 @@ def clean_free_text(s: str):
     return s.strip()
 
 
-def prepare_full_texts(excel_path: Union[str, Path]):
+def prepare_full_texts(excel_path: Union[str, Path],
+                       column_index):
     df = pandas.read_excel(excel_path)
+    columns_to_use = [cols[i] for i in column_index]
     df["full_text"] = df.apply(
-        lambda row: "\n".join(str(row[col]) for col in columns_for_analysis), axis=1
+        lambda row: "\n".join(str(row[col]) for col in columns_to_use), axis=1
     )
     df["cleaned_full_text"] = df["full_text"].apply(clean_free_text)
     return df
@@ -71,26 +74,31 @@ def run_bert(
     embedding_model: SentenceTransformer,
     embeddings: numpy.ndarray,
     target_dir: Union[str, Path],
+    col_str: str,
     n_neighbors: int = 15,
     nr_topics: Union[None, str, int] = "auto",
     random_state: int = 77,
 ):
-    logger.info(f"Running BERTopic on {len(docs)} documents")
+
     model_dir = Path(target_dir) / "models"
     output_dir = Path(target_dir) / "output"
     fig_dir = Path(target_dir) / "figures"
-    model_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Created model directory at: {model_dir.absolute()}")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Created output directory at: {output_dir.absolute()}")
-    fig_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Created figure directory at: {fig_dir.absolute()}")
-    model_name = f'nn{n_neighbors}{f"_nr{nr_topics}" if nr_topics is not None else ""}'
+    if os.path.exists(model_dir) is False:
+        model_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Created model directory at: {model_dir.absolute()}")
+    if os.path.exists(output_dir) is False:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Created output directory at: {output_dir.absolute()}")
+    if os.path.exists(fig_dir) is False:
+        fig_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Created figure directory at: {fig_dir.absolute()}")
+    model_name = f'nn{n_neighbors}{f"_nr{nr_topics}" if nr_topics is not None else ""}_{col_str}'
     path_metadata_csv = Path(target_dir) / "metadata.csv"
     representation_model = KeyBERTInspired()
     umap_model = UMAP(
         n_neighbors=n_neighbors,
         n_components=5,
+        init="random",
         min_dist=0.0,
         metric="cosine",
         random_state=random_state,
@@ -134,12 +142,19 @@ def run_bert(
     fig_topic.write_html(fig_dir.joinpath(f"{model_name}.html"))
     fig_topic_hierarchy = topic_model.visualize_hierarchy()
     fig_topic_hierarchy.write_html(fig_dir.joinpath(f"{model_name}_hierarchy.html"))
+
+    silhouette = calculate_silhouette_score(
+        topic_model, embeddings, topic_model.topics_
+    )
+
     metadata = {
         "random_state": random_state,
         "n_neighbors": n_neighbors,
         "nr_topics": nr_topics,
         "topics_count": topics_count,
         "outliers_count": outliers_count,
+        "columns": col_str,
+        "silhouette_score": silhouette
     }
     logger.info(metadata)
     pandas.DataFrame([metadata]).to_csv(
@@ -150,8 +165,8 @@ def run_bert(
     )
 
 
-def get_model(target_dir, n_neighbors, nr_topics=None):
-    model_name = f'nn{n_neighbors}{f"_nr{nr_topics}" if nr_topics is not None else ""}'
+def get_model(target_dir, n_neighbors, col_str, nr_topics=None):
+    model_name = f'nn{n_neighbors}{f"_nr{nr_topics}" if nr_topics is not None else ""}_{col_str}'
     model_path = Path(target_dir) / "models" / f"{model_name}"
     return BERTopic.load(str(model_path.absolute())), model_name
 
@@ -165,37 +180,38 @@ def calculate_silhouette_score(topic_model, embeddings, topics):
 
 
 if __name__ == "__main__":
-    df = prepare_full_texts(sys.argv[1])
-    docs = df["cleaned_full_text"].tolist()
+    if sys.argv[3] == 'Clean_Run':
+        try:
+            shutil.rmtree(sys.argv[2])
+            print(f"Directory '{sys.argv[2]}' and its contents deleted successfully.")
+        except OSError as e:
+            print(f"Error deleting directory '{sys.argv[2]}': {e}")
     embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
-    embeddings = embedding_model.encode(docs, show_progress_bar=True)
-    for i in range(2, 20):
-        logger.info(f"Running neighbors: {i}")
-        run_bert(
-            df,
-            docs,
-            embedding_model,
-            embeddings,
-            sys.argv[2],
-            n_neighbors=i,
-            nr_topics=None,
-        )
-    logger.info("Finished running BERTopic")
-    path_evaluation_csv = Path(sys.argv[2]) / "evaluation.csv"
-    logger.info("Calculating coherence scores")
-    for i in range(2, 20):
-        topic_model, model_name = get_model(sys.argv[2], i)
-        silhouette = calculate_silhouette_score(
-            topic_model, embeddings, topic_model.topics_
-        )
-        metadata = {
-            "n_neighbors": i,
-            "silhouette_score": silhouette,
-        }
-        pandas.DataFrame([metadata]).to_csv(
-            path_evaluation_csv,
-            mode="a",
-            header=not path_evaluation_csv.exists(),
-            index=False,
-        )
-    logger.info("Finished calculating silhouette scores")
+    nn_range = range(2, 27)
+    for col_str, col_index in ({'columns1': [0],
+                                'columns2': [1],
+                                'columns3': [2],
+                                'columns4': [3],
+                                'columns5': [4],
+                                'columns23': [1, 2],
+                                'columns45': [3, 4],
+                                'columns124': [0, 1, 3],
+                                'column12345': [0, 1, 2, 3, 4]
+                                }
+    ).items():
+        df = prepare_full_texts(sys.argv[1], col_index)
+        docs = df["cleaned_full_text"].tolist()
+        embeddings = embedding_model.encode(docs, show_progress_bar=True)
+        for i in nn_range:
+            logger.info(f"Running neighbors: {i} with columns: {col_str}")
+            run_bert(
+                df,
+                docs,
+                embedding_model,
+                embeddings,
+                sys.argv[2],
+                col_str,
+                n_neighbors=i,
+                nr_topics=None,
+            )
+        logger.info(f"Finished running BERTopic for {col_str}")
