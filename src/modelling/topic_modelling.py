@@ -165,10 +165,10 @@ def run_bert(
     )
 
 
-def get_model(target_dir, n_neighbors, col_str, nr_topics=None):
-    model_name = f'nn{n_neighbors}{f"_nr{nr_topics}" if nr_topics is not None else ""}_{col_str}'
-    model_path = Path(target_dir) / "models" / f"{model_name}"
-    return BERTopic.load(str(model_path.absolute())), model_name
+#def get_model(target_dir, n_neighbors, col_str, nr_topics=None):
+#    model_name = f'nn{n_neighbors}{f"_nr{nr_topics}" if nr_topics is not None else ""}_{col_str}'
+#    model_path = Path(target_dir) / "models" / f"{model_name}"
+#    return BERTopic.load(str(model_path.absolute())), model_name
 
 
 def calculate_silhouette_score(topic_model, embeddings, topics):
