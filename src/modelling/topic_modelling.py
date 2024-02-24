@@ -19,6 +19,8 @@ from bertopic import BERTopic
 from bertopic.representation import KeyBERTInspired
 from bertopic.vectorizers import ClassTfidfTransformer
 
+from sklearn.feature_extraction.text import CountVectorizer
+
 from cuml.cluster import HDBSCAN
 from cuml.manifold import UMAP
 
@@ -38,33 +40,68 @@ def clean_free_text(s: str):
     content = markdown.markdown(s)
     soup = BeautifulSoup(content, "html.parser")
     s = soup.get_text()
+    s = s.lower()
     s = re.sub(r"http\S+", "", s)
     s = re.sub("[^a-zA-Z]+", " ", s)
-    s = s.replace("Summary of the impact indicative maximum 100 words ", "")
-    s = s.replace("Summary of the impact ", "")
-    s = s.replace("Underpinning research indicative maximum 500 words ", "")
-    s = s.replace("Underpinning research ", "")
+    # Note: re.sub to a-zA-Z means that the following regex for X words doesnt hit
+    s = s.replace("summary of the impact indicative maximum 100 words ", "")
+    s = s.replace("summary of the impact ", "")
+    s = s.replace("underpinning research indicative maximum 500 words ", "")
+    s = s.replace("underpinning research ", "")
     s = s.replace(
-        "References to the research indicative maximum of six references ", ""
+        "references to the research indicative maximum of six references ", ""
     )
-    s = s.replace("References to the research ", "")
-    s = s.replace("Details of the impact indicative maximum 750 words ", "")
-    s = s.replace("Details of the impact  ", "")
+    s = s.replace("references to the research ", "")
+    s = s.replace("details of the impact indicative maximum 750 words ", "")
+    s = s.replace("details of the impact ", "")
+
     s = s.replace(
         "Sources to corroborate the impact indicative maximum of 10 references ", ""
     )
     s = s.replace("Sources to corroborate the impact ", "")
+
+    # New after ngram searches, noting issues with above:
+    s.replace('indicative maximum of six references', '')
+    s.replace('indicative maximum words', '')
+    s.replace('indicative maximum of references', '')
+    s.replace('text redacted', '')
+    s.replace("text removed for publication", "")
+    s.replace("supplied by hei on request", "")
     return s.strip()
 
+def make_freqs(df_to_clean, ngrams):
+    logger.info(f'Calculating {ngrams}-gram frequencies')
+    word_vectorizer = CountVectorizer(ngram_range=(ngrams, ngrams), analyzer='word')
+    sparse_matrix = word_vectorizer.fit_transform(df_to_clean["cleaned_full_text"])
+    frequencies = sum(sparse_matrix).toarray()[0]
+    df_to_clean = pandas.DataFrame(frequencies,
+                                   index=word_vectorizer.get_feature_names_out(),
+                                   columns=['frequency']).sort_values(by='frequency',
+                                                                      ascending=False)
+    csv_path = os.path.join(os.getcwd(),
+                            'data',
+                            'text_processed',
+                            f'{ngrams}-gram_frequencies.csv')
+    df_to_clean.to_csv(csv_path)
 
-def prepare_full_texts(excel_path: Union[str, Path],
-                       column_index):
+
+def prepare_full_texts(excel_path: Union[str, Path], col_index: List[int]):
     df = pandas.read_excel(excel_path)
-    columns_to_use = [cols[i] for i in column_index]
+    columns_to_use = [cols[i] for i in col_index]
     df["full_text"] = df.apply(
         lambda row: "\n".join(str(row[col]) for col in columns_to_use), axis=1
     )
     df["cleaned_full_text"] = df["full_text"].apply(clean_free_text)
+    if sys.argv[4] == "Calculate_Frequencies":
+        if all(i in col_index for i in range(0, 5)):
+            logger.info('Making ngrams/cleaned dataset for inspection on full col_index')
+            for n in range(1, 6):
+                make_freqs(df.copy(), n)
+            output_path = os.path.join(os.getcwd(),
+                                       'data',
+                                       'text_processed',
+                                       'text_processed.xlsx')
+            df.to_excel(output_path)
     return df
 
 
@@ -79,7 +116,6 @@ def run_bert(
     nr_topics: Union[None, str, int] = "auto",
     random_state: int = 77,
 ):
-
     model_dir = Path(target_dir) / "models"
     output_dir = Path(target_dir) / "output"
     fig_dir = Path(target_dir) / "figures"
@@ -142,11 +178,9 @@ def run_bert(
     fig_topic.write_html(fig_dir.joinpath(f"{model_name}.html"))
     fig_topic_hierarchy = topic_model.visualize_hierarchy()
     fig_topic_hierarchy.write_html(fig_dir.joinpath(f"{model_name}_hierarchy.html"))
-
     silhouette = calculate_silhouette_score(
         topic_model, embeddings, topic_model.topics_
     )
-
     metadata = {
         "random_state": random_state,
         "n_neighbors": n_neighbors,
@@ -163,12 +197,6 @@ def run_bert(
         header=not path_metadata_csv.exists(),
         index=False,
     )
-
-
-#def get_model(target_dir, n_neighbors, col_str, nr_topics=None):
-#    model_name = f'nn{n_neighbors}{f"_nr{nr_topics}" if nr_topics is not None else ""}_{col_str}'
-#    model_path = Path(target_dir) / "models" / f"{model_name}"
-#    return BERTopic.load(str(model_path.absolute())), model_name
 
 
 def calculate_silhouette_score(topic_model, embeddings, topics):
@@ -188,17 +216,17 @@ if __name__ == "__main__":
             print(f"Error deleting directory '{sys.argv[2]}': {e}")
     embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
     nn_range = range(2, 27)
-    for col_str, col_index in ({'columns1': [0],
-                                'columns2': [1],
-                                'columns3': [2],
-                                'columns4': [3],
-                                'columns5': [4],
-                                'columns23': [1, 2],
-                                'columns45': [3, 4],
-                                'columns124': [0, 1, 3],
-                                'column12345': [0, 1, 2, 3, 4]
-                                }
-    ).items():
+    for col_str, col_index in ({
+        'column12345': [0, 1, 2, 3, 4],
+        'columns1': [0],
+        'columns2': [1],
+        'columns3': [2],
+        'columns4': [3],
+        'columns5': [4],
+        'columns23': [1, 2],
+        'columns45': [3, 4],
+        'columns124': [0, 1, 3]
+    }).items():
         df = prepare_full_texts(sys.argv[1], col_index)
         docs = df["cleaned_full_text"].tolist()
         embeddings = embedding_model.encode(docs, show_progress_bar=True)
