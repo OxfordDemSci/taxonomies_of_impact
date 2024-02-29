@@ -1,4 +1,5 @@
 import sys
+import os
 from pathlib import Path
 
 import pandas
@@ -23,9 +24,37 @@ if __name__ == "__main__":
     reduced_model_dir.mkdir(parents=True, exist_ok=True)
     step = 0.001
     df = pandas.read_excel(sys.argv[3])
+    oldmodel_topic = pandas.read_csv(os.path.join(os.getcwd(),
+                                                  'data',
+                                                  'old_model',
+                                                  'oldmodel_topic.csv'
+                                                  )
+                                     )
+    oldmodel_finaltopic = pandas.read_csv(os.path.join(os.getcwd(),
+                                                       'data',
+                                                       'old_model',
+                                                       'oldmodel_finaltopic.csv'
+                                                       )
+                                          )
+    df = pandas.merge(df,
+                      oldmodel_topic,
+                      how='left',
+                      left_on='REF impact case study identifier',
+                      right_on='ics_id'
+                      )
+    df = pandas.merge(df,
+                      oldmodel_finaltopic,
+                      how='left',
+                      left_on='REF impact case study identifier',
+                      right_on='ics_id'
+                      )
+    df = df.drop('ics_id_x', axis=1)
+    df = df.drop('ics_id_y', axis=1)
+
+
     docs = df["cleaned_full_text"].tolist()
     representation_model = KeyBERTInspired()
-    for i in range(51):
+    for i in range(0, 51):
         logger.info(f"Reducing outliers with threshold {step*i}")
         topic_model = BERTopic.load(model_path)
         new_topics = topic_model.reduce_outliers(

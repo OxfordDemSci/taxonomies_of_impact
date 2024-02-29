@@ -56,17 +56,18 @@ def clean_free_text(s: str):
     s = s.replace("details of the impact ", "")
 
     s = s.replace(
-        "Sources to corroborate the impact indicative maximum of 10 references ", ""
+        "sources to corroborate the impact indicative maximum of 10 references ", ""
     )
-    s = s.replace("Sources to corroborate the impact ", "")
+    s = s.replace("sources to corroborate the impact ", "")
 
     # New after ngram searches, noting issues with above:
-    s.replace('indicative maximum of six references', '')
-    s.replace('indicative maximum words', '')
-    s.replace('indicative maximum of references', '')
-    s.replace('text redacted', '')
-    s.replace("text removed for publication", "")
-    s.replace("supplied by hei on request", "")
+    s = s.replace('indicative maximum of six references', '')
+    s = s.replace('indicative maximum words', '')
+    s = s.replace('indicative maximum of references', '')
+    s = s.replace("text redacted for publication", "")
+    s = s.replace('text redacted', '')
+    s = s.replace("text removed for publication", "")
+    s = s.replace("supplied by hei on request", "")
     return s.strip()
 
 def make_freqs(df_to_clean, ngrams):
@@ -92,6 +93,7 @@ def prepare_full_texts(excel_path: Union[str, Path], col_index: List[int]):
         lambda row: "\n".join(str(row[col]) for col in columns_to_use), axis=1
     )
     df["cleaned_full_text"] = df["full_text"].apply(clean_free_text)
+    df = df[df['REF impact case study identifier'].notnull()]
     if sys.argv[4] == "Calculate_Frequencies":
         if all(i in col_index for i in range(0, 5)):
             logger.info('Making ngrams/cleaned dataset for inspection on full col_index')

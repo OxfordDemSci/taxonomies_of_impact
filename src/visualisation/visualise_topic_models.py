@@ -24,8 +24,8 @@ def main():
         scatter = ax.scatter(
             x=meta[meta['columns'] == col]['topics_count'],
             y=meta[meta['columns'] == col]['outliers_count'],
-            s=meta[meta['columns'] == col]['silhouette_score'] * 2525 - 1260,
-            c=meta[meta['columns'] == col]['silhouette_score'] * 2525 - 1260,
+            s=meta[meta['columns'] == col]['silhouette_score'] * 2500 - 1000,
+            c=meta[meta['columns'] == col]['silhouette_score'] * 2500 - 1000,
             edgecolor='k'
         )
         ax.set_ylim(1800, 3200)
