@@ -4,6 +4,7 @@ import os
 import numpy as np
 import pandas as pd
 import fitz
+import jsonlines
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
@@ -13,7 +14,7 @@ from pathlib import Path
 import json
 import time
 
-def read_pdf_and_perform_regex(pdf_path):
+def read_pdf_and_perform_regex_v2(pdf_path):
     # Open the PDF file
     doc = fitz.open(pdf_path)
     
@@ -39,10 +40,19 @@ def read_pdf_and_perform_regex(pdf_path):
     else:
         print(p)
         names = None
-    # Close the document
+    
+    # In some cases there are weird anomalies. Then just extract everything between "Names" and the next section
+    if names == []:
+        alt_index = [i for i, string in enumerate(clean_text) if re.match(r'^Period when the claimed', string)]
+        if alt_index == []:
+            alt_index = [i for i, string in enumerate(clean_text) if re.match(r'1. Summary of the impact', string)]
+        names = rel_text[name_indices[0]:alt_index[0]]
+    
+    # Close document
     doc.close()
     
     return names
+
 
 
 def download_pdf_from_url(driver):
@@ -82,6 +92,26 @@ def scrape_grant_info_from_url(driver):
     except:
         return "None"
 
+
+def make_or_load_cw(path, keys):
+    file_path = path / 'cw_pdf_key.jsonl'
+    if os.path.exists(file_path):
+        # Reading JSON Lines file
+        with open(file_path, 'r') as f:
+            cw = json.load(f)
+        
+    else:
+        pdf_files = [pdf for pdf in os.listdir(path) if '.pdf' in pdf]
+        pdf_files_by_cd = sorted(pdf_files, key=lambda x: os.path.getmtime(os.path.join(output_path, x)))
+
+        cw = dict(zip(pdf_files_by_cd, keys))
+        
+        with open(file_path, 'w') as f:
+            json.dump(cw, f)
+    
+    return cw
+
+
 if __name__ == "__main__":
 
     # Paths
@@ -106,6 +136,8 @@ if __name__ == "__main__":
     data = pd.read_csv(data_path / 'final' / 'enhanced_ref_data.csv')
     keys = data['REF impact case study identifier']
 
+    data.loc[data['REF impact case study identifier'] == '1e6e075e-d5f5-421c-bb45-2708636b5190']
+    
     # urls
     head = 'https://results2021.ref.ac.uk/impact/'
 
@@ -127,16 +159,12 @@ if __name__ == "__main__":
         aux_dict[key] = scrape_secondary_info_from_url(driver)
         grant_dict[key] = scrape_grant_info_from_url(driver)
 
-    ## Make crosswalk from pdf name to key using date of creation
-    pdf_files = [pdf for pdf in os.listdir(output_path) if '.pdf' in pdf]
-    pdf_files_by_cd = sorted(pdf_files, key=lambda x: os.path.getctime(os.path.join(output_path, x)))
-
-    cw = dict(zip(pdf_files_by_cd, keys))
-
+    cw = make_or_load_cw(output_path, keys)
+    
     ## Read pdfs
-    for p in pdf_files:
+    for p in cw.keys():
         cw_key = cw[p]
-        names_dict[cw_key]= read_pdf_and_perform_regex(output_path / p)
+        names_dict[cw_key]= read_pdf_and_perform_regex_v2(output_path / p)
 
     ## Write results
     with open(output_path / 'author_data.jsonl', 'w') as file:
@@ -144,6 +172,23 @@ if __name__ == "__main__":
             json_line = json.dumps({key: value})
             file.write(json_line + '\n')
 
+    # Find the maximum length among all lists
+    max_length = max([len(value) for key, value in names_dict.items() if value])
+
+    # Add elements to each list to make them the same length as the maximum length
+    names_dict_df = names_dict
+    for key, value in names_dict_df.items():
+        if not value:
+            names_dict[key] = [None for i in range(max_length)]
+        else:
+            while len(value) < max_length:
+                value.append(None)  # You can use any default value you want
+            
+    df = pd.DataFrame([value for key, value in names_dict_df.items()],
+                      index = keys)
+    
+    df.to_excel(output_path / 'author_data.xlsx')
+    
     with open(output_path / 'aux_data.jsonl', 'w') as file:
         for key, value in aux_dict.items():
             json_line = json.dumps({key: value})
