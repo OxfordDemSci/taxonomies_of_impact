@@ -4,7 +4,6 @@ import os
 import numpy as np
 import pandas as pd
 import fitz
-import jsonlines
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
@@ -135,8 +134,6 @@ if __name__ == "__main__":
     # Read data
     data = pd.read_csv(data_path / 'final' / 'enhanced_ref_data.csv')
     keys = data['REF impact case study identifier']
-
-    data.loc[data['REF impact case study identifier'] == '1e6e075e-d5f5-421c-bb45-2708636b5190']
     
     # urls
     head = 'https://results2021.ref.ac.uk/impact/'
