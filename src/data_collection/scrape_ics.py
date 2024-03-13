@@ -13,7 +13,17 @@ from pathlib import Path
 import json
 import time
 
-def read_pdf_and_perform_regex_v2(pdf_path):
+
+def extract_based_on_indices(text, indices_1, indices_2):
+        indices = dict(zip(indices_1, indices_2))
+
+        result = [text[(key+1):value] for key, value in indices.items()]
+        result = list(itertools.chain.from_iterable(result))
+        result = [n.strip() for n in result if n != '']
+        return result
+
+
+def read_pdf_and_perform_regex(pdf_path):
     # Open the PDF file
     doc = fitz.open(pdf_path)
     
@@ -25,33 +35,55 @@ def read_pdf_and_perform_regex_v2(pdf_path):
     clean_text = [re.sub(r'\d{1}B', '', r) for r in rel_text]
     clean_text = [re.sub(r'^Name.*', 'Name:', string) for string in clean_text]
     clean_text = [re.sub(r'^Role.*', 'Role:', string) for string in clean_text]
-
-    # Find all occurrences of "Name:" and "Role:"
+    clean_text = [re.sub(r'^Period.*undertaken', 'Start:', string) for string in clean_text]
+    clean_text = [re.sub(r'^Period when the claimed.*', 'End:', string) for string in clean_text]
+    clean_text = [re.sub(r'^Period.*', 'Period:', string) for string in clean_text]
+    clean_text = [re.sub(r'\\s+', '', string) for string in clean_text]
+    clean_text = [string for string in clean_text if string != '']
+    clean_text = [string for string in clean_text if string != 'submitting HEI:']
+    
+    # Find all occurrences of "Name:" and "Role:" and end index
     name_indices = [i for i, string in enumerate(clean_text) if re.match(r'^Name:', string)]
     role_indices = [i for i, string in enumerate(clean_text) if re.match(r'^Role:', string)]
-
-    if name_indices:
-        indices = dict(zip(name_indices, role_indices))
-
-        names = [clean_text[(key+1):value] for key, value in indices.items()]
-        names = list(itertools.chain.from_iterable(names))
-        names = [n.strip() for n in names if n != '']
+    period_indices = [i for i, string in enumerate(clean_text) if re.match(r'^Period:', string)]
+    end_indices = [i for i, string in enumerate(clean_text) if re.match(r'^End:', string)]
+    if end_indices == []:
+        end_indices = [i for i, string in enumerate(clean_text) if re.match(r'1. Summary', string)]
+    
+    if name_indices and role_indices:
+        names = extract_based_on_indices(clean_text, name_indices, role_indices)
     else:
+        print("No names")
         print(p)
         names = None
     
+    if role_indices and period_indices:
+        roles = extract_based_on_indices(clean_text, role_indices, period_indices)
+    else:
+        print("No roles")
+        print(p)
+        roles = None
+    
+    if period_indices and end_indices:
+        periods = extract_based_on_indices(clean_text, period_indices, end_indices)
+        periods = [p for p in periods if p != 'by' and p != 'employed']
+    else:
+        print("No periods")
+        print(p)
+        periods = None
+    
     # In some cases there are weird anomalies. Then just extract everything between "Names" and the next section
     if names == []:
-        alt_index = [i for i, string in enumerate(clean_text) if re.match(r'^Period when the claimed', string)]
-        if alt_index == []:
-            alt_index = [i for i, string in enumerate(clean_text) if re.match(r'1. Summary of the impact', string)]
-        names = rel_text[name_indices[0]:alt_index[0]]
+        names = rel_text[name_indices[0]:end_indices[0]]
+        names = [n for n in names if n != '' and not re.match(r' HEI:|Period when|Details of|^Name(s)|^Roles(s)', n)]
     
     # Close document
     doc.close()
     
-    return names
-
+    return {'names': names,
+            'roles': roles,
+            'periods': periods,
+            'raw': clean_text[:end_indices[0]]}
 
 
 def download_pdf_from_url(driver):
@@ -141,7 +173,7 @@ if __name__ == "__main__":
     # setup emtpy dicts for the results
     grant_dict = dict()
     aux_dict = dict()
-    names_dict = dict()
+    result_dict = dict()
     
     for key in keys:
         print(key)
@@ -161,37 +193,55 @@ if __name__ == "__main__":
     ## Read pdfs
     for p in cw.keys():
         cw_key = cw[p]
-        names_dict[cw_key]= read_pdf_and_perform_regex_v2(output_path / p)
+        result_dict[cw_key]= read_pdf_and_perform_regex(output_path / p)
 
-    ## Write results
+    ## Write names
     with open(output_path / 'author_data.jsonl', 'w') as file:
-        for key, value in names_dict.items():
-            json_line = json.dumps({key: value})
+        for key, value in result_dict.items():
+            json_line = json.dumps({key: value['names']})
             file.write(json_line + '\n')
 
-    # Find the maximum length among all lists
-    max_length = max([len(value) for key, value in names_dict.items() if value])
-
-    # Add elements to each list to make them the same length as the maximum length
-    names_dict_df = names_dict
-    for key, value in names_dict_df.items():
-        if not value:
-            names_dict[key] = [None for i in range(max_length)]
-        else:
-            while len(value) < max_length:
-                value.append(None)  # You can use any default value you want
-            
-    df = pd.DataFrame([value for key, value in names_dict_df.items()],
-                      index = keys)
+    ## Write roles
+    with open(output_path / 'role_data.jsonl', 'w') as file:
+        for key, value in result_dict.items():
+            json_line = json.dumps({key: value['roles']})
+            file.write(json_line + '\n')
     
-    df.to_excel(output_path / 'author_data.xlsx')
+    ## Write periods
+    with open(output_path / 'period_data.jsonl', 'w') as file:
+        for key, value in result_dict.items():
+            json_line = json.dumps({key: value['periods']})
+            file.write(json_line + '\n')
     
+    ## Write raw
+    with open(output_path / 'raw_data.jsonl', 'w') as file:
+        for key, value in result_dict.items():
+            json_line = json.dumps({key: value['raw']})
+            file.write(json_line + '\n')
+    
+    ## Write aux
     with open(output_path / 'aux_data.jsonl', 'w') as file:
         for key, value in aux_dict.items():
             json_line = json.dumps({key: value})
             file.write(json_line + '\n')
 
+    ## Write grants
     with open(output_path / 'grant_data.jsonl', 'w') as file:
         for key, value in grant_dict.items():
             json_str = json.dumps({key: value})
             file.write(json_str + '\n')
+    
+    ## Write excel version
+    df_list = []
+    
+    for key, value in result_dict.items():
+        try:
+            formatted = [[key, i] for i in result_dict[key]['names']]
+        except:
+            formatted = [[key, "None"]]
+        
+        df_list.append(pd.DataFrame(formatted))
+
+    pd.concat(df_list).rename(columns = {0: 'key', 1: 'author'}).\
+        to_excel(output_path / 'author_data.xlsx')
+    
