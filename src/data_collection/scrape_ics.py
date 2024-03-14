@@ -231,17 +231,40 @@ if __name__ == "__main__":
             json_str = json.dumps({key: value})
             file.write(json_str + '\n')
     
-    ## Write excel version
+    ## Make excel version
     df_list = []
-    
+
     for key, value in result_dict.items():
         try:
-            formatted = [[key, i] for i in result_dict[key]['names']]
-        except:
-            formatted = [[key, "None"]]
-        
-        df_list.append(pd.DataFrame(formatted))
+            names = result_dict[key].get('names', [None])
+            periods = result_dict[key].get('periods', [None] * len(names))  # Prepare periods, defaulting to None
+            roles = result_dict[key].get('roles', [None] * len(names))  # Prepare roles, defaulting to None
+            
+            # Adjust periods and roles lists based on matching lengths with names
+            if len(periods) != len(names):  # If periods length doesn't match names, replace with None
+                periods = [None] * len(names)
+            if len(roles) != len(names):  # If roles length doesn't match names, replace with None
+                roles = [None] * len(names)
 
-    pd.concat(df_list).rename(columns = {0: 'key', 1: 'author'}).\
-        to_excel(output_path / 'author_data.xlsx')
+            formatted = [[key, names[i], roles[i], periods[i]] for i in range(len(names))]
+        except TypeError:
+            formatted = [[key, None, None, None]]
+        if not formatted:
+            formatted = [[key, None, None, None]]
+        df_list.append(pd.DataFrame(formatted, columns=['Key', 'Name', 'Role', 'Period']))
     
+    result_df = pd.concat(df_list)
+    cw_df = pd.DataFrame([[key, value] for key, value in cw.items()]).\
+        rename(columns = {0: 'Pdf_title', 1: 'Key'})
+    merge_df = data[['Institution name', 'Unit of assessment name',
+                     'REF impact case study identifier']].rename(
+                         columns = {'REF impact case study identifier': 'Key'})
+    
+    final_df = pd.merge(cw_df, result_df, how = 'left', on = 'Key').\
+        merge(merge_df, on = 'Key')
+    final_df['URL'] = head + final_df['Key']
+    
+    ## Check merge went as expected
+    assert final_df.shape[0] == result_df.shape[0]
+    
+    final_df.to_excel(output_path / 'author_data_full.xlsx')
